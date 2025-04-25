@@ -33,7 +33,7 @@ namespace overlaps {
     }
 
     type SpriteHandler = (sprite: Sprite, otherSprite: Sprite) => void;
-    type TileHandler = (sprite: Sprite) => void;
+    type TileHandler = (sprite: Sprite, location: tiles.Location) => void;
 
     let stateStack: EventState[];
 
@@ -79,7 +79,8 @@ namespace overlaps {
                                 updateTileStateAndFireEvents(
                                     sprite,
                                     targetTileIndex,
-                                    tileMap
+                                    tileMap,
+                                    undefined
                                 );
                             }
                         }
@@ -225,21 +226,22 @@ namespace overlaps {
             if (!isOverlappingAlready) {
                 data.overlappingSprites.push(otherSprite);
 
-                const handler = currentState.getSpriteHandler(SpriteEvent.StartOverlapping, kind, otherKind)
-                if (handler) {
-                    handler.handler(sprite, otherSprite);
+                const startHandler = currentState.getSpriteHandler(SpriteEvent.StartOverlapping, kind, otherKind)
+                if (startHandler) {
+                    startHandler.handler(sprite, otherSprite);
                 }
             }
         });
     }
 
     //% blockId=sprite_overlap_tile_event
-    //% block="on $sprite of kind $kind $event tile $tile"
+    //% block="on $sprite of kind $kind $event tile $tile at $location"
     //% draggableParameters="reporter"
     //% kind.shadow=spritekind
     //% tile.shadow=tileset_tile_picker
+    //% tile.defl=assets.tile`myTile`
     //% group="Overlaps"
-    export function tileEvent(kind: number, tile: Image, event: TileEvent, handler: (sprite: Sprite) => void) {
+    export function tileEvent(kind: number, tile: Image, event: TileEvent, handler: (sprite: Sprite, location: tiles.Location) => void) {
         init();
         if (!tile) return;
 
@@ -261,12 +263,12 @@ namespace overlaps {
             const tileIndex = tileMapInstance.getImageType(tile);
 
             if (tileIndex !== -1) {
-                updateTileStateAndFireEvents(sprite, tileIndex, tileMapInstance);
+                updateTileStateAndFireEvents(sprite, tileIndex, tileMapInstance, location);
             }
         });
     }
 
-    function updateTileStateAndFireEvents(sprite: Sprite, tileIndex: number, map: tiles.TileMap) {
+    function updateTileStateAndFireEvents(sprite: Sprite, tileIndex: number, map: tiles.TileMap, specificLocation?: tiles.Location) {
         if (!sprite || !map) return;
         let data: SpriteEventData = sprite.data[SPRITE_DATA_KEY];
 
@@ -288,35 +290,37 @@ namespace overlaps {
         if (!tileImageForHandler) return;
 
         const currentState = state();
+        const locationForHandler = specificLocation || sprite.tilemapLocation();
+
 
         if (tileState.flag & TileFlag.Overlapping) {
             if (!(oldFlags & TileFlag.Overlapping)) {
                 const handler = currentState.getTileHandler(TileEvent.StartOverlapping, sprite.kind(), tileImageForHandler);
-                if (handler) handler.handler(sprite);
+                if (handler) handler.handler(sprite, locationForHandler);
             }
         } else if (oldFlags & TileFlag.Overlapping) {
             const handler = currentState.getTileHandler(TileEvent.StopOverlapping, sprite.kind(), tileImageForHandler);
-            if (handler) handler.handler(sprite);
+            if (handler) handler.handler(sprite, locationForHandler);
         }
 
         if (tileState.flag & TileFlag.FullyWithin) {
             if (!(oldFlags & TileFlag.FullyWithin)) {
                 const handler = currentState.getTileHandler(TileEvent.Enters, sprite.kind(), tileImageForHandler);
-                if (handler) handler.handler(sprite);
+                if (handler) handler.handler(sprite, locationForHandler);
             }
         } else if (oldFlags & TileFlag.FullyWithin) {
             const handler = currentState.getTileHandler(TileEvent.Exits, sprite.kind(), tileImageForHandler);
-            if (handler) handler.handler(sprite);
+            if (handler) handler.handler(sprite, locationForHandler);
         }
 
         if (tileState.flag & TileFlag.WithinArea) {
             if (!(oldFlags & TileFlag.WithinArea)) {
                 const handler = currentState.getTileHandler(TileEvent.EntersArea, sprite.kind(), tileImageForHandler);
-                if (handler) handler.handler(sprite);
+                if (handler) handler.handler(sprite, locationForHandler);
             }
         } else if (oldFlags & TileFlag.WithinArea) {
             const handler = currentState.getTileHandler(TileEvent.ExitsArea, sprite.kind(), tileImageForHandler);
-            if (handler) handler.handler(sprite);
+            if (handler) handler.handler(sprite, locationForHandler);
         }
 
         if (tileState.flag === 0 && data.tiles.indexOf(tileState) !== -1) {
@@ -376,18 +380,12 @@ namespace overlaps {
         }
     }
 
-    /**
-     * Checks if a sprite is currently overlapping any tile with the specified image.
-     * This is a synchronous check performed at the moment the block is called.
-     * @param sprite The sprite to check.
-     * @param tileImage The image of the tile to check for overlap with.
-     * @returns true if the sprite is overlapping a tile with the given image, false otherwise.
-     */
     //% blockId=sprite_overlap_tile_bool
     //% block="$sprite is currently overlapping tile image $tileImage"
     //% sprite.shadow=variables_get
     //% sprite.defl=mySprite
     //% tileImage.shadow=tileset_tile_picker
+    //% tileImage.defl=assets.tile`myTile`
     //% group="Overlaps"
     export function isSpriteOverlappingTileImage(sprite: Sprite, tileImage: Image): boolean {
         if (!sprite || !tileImage) {
