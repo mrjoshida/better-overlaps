@@ -161,6 +161,7 @@ namespace overlaps {
 
     class TileState {
         flag: number;
+        lastKnownLocation?: tiles.Location;
         constructor(public tileIndex: number, flag = 0) {
             this.flag = flag;
         }
@@ -282,49 +283,96 @@ namespace overlaps {
 
         const tileState = data.getTileEntry(tileIndex, true);
         const oldFlags = tileState.flag;
-        updateTileState(tileState, sprite, tileIndex, map);
+        // Before updating the state, preserve the last known specific location if it's about to be "started"
+        // This is important if specificLocation is only provided on the exact frame of starting.
+        let previousSpecificLocationForThisTile = tileState.lastKnownLocation;
 
-        if (oldFlags === tileState.flag) return;
+        updateTileState(tileState, sprite, tileIndex, map); // This updates flags
+
+        if (oldFlags === tileState.flag) return; // No change in state, no events to fire
 
         const tileImageForHandler = map.getTileImage(tileIndex);
         if (!tileImageForHandler) return;
 
         const currentState = state();
-        const locationForHandler = specificLocation || sprite.tilemapLocation();
 
+        // Default location for events not tied to a specific instance trigger or if no better one is found
+        const fallbackLocation = sprite.tilemapLocation();
 
         if (tileState.flag & TileFlag.Overlapping) {
-            if (!(oldFlags & TileFlag.Overlapping)) {
+            if (!(oldFlags & TileFlag.Overlapping)) { // Just started overlapping
                 const handler = currentState.getTileHandler(TileEvent.StartOverlapping, sprite.kind(), tileImageForHandler);
-                if (handler) handler.handler(sprite, locationForHandler);
+                if (handler) {
+                    // When starting, specificLocation IS the tile's location. Store it.
+                    if (specificLocation) {
+                        tileState.lastKnownLocation = specificLocation;
+                        handler.handler(sprite, specificLocation);
+                    } else {
+                        // This case (starting overlap without a specificLocation) should be rare if
+                        // scene.onOverlapTile is the primary trigger. Fallback if necessary.
+                        tileState.lastKnownLocation = fallbackLocation; // Store fallback if no specific one
+                        handler.handler(sprite, fallbackLocation);
+                    }
+                }
             }
-        } else if (oldFlags & TileFlag.Overlapping) {
+        } else if (oldFlags & TileFlag.Overlapping) { // Was overlapping, now it's not (Stopped Overlapping)
             const handler = currentState.getTileHandler(TileEvent.StopOverlapping, sprite.kind(), tileImageForHandler);
-            if (handler) handler.handler(sprite, locationForHandler);
+            if (handler) {
+                // Use the cached lastKnownLocation for the tile we just stopped overlapping.
+                // If for some reason it wasn't cached (e.g., state initialized mid-overlap),
+                // then fallback, but ideally it should be there from the StartOverlapping.
+                const locationToReport = tileState.lastKnownLocation || previousSpecificLocationForThisTile || fallbackLocation;
+                handler.handler(sprite, locationToReport);
+                // Optionally, clear tileState.lastKnownLocation here if the tile is no longer relevant
+                // or keep it if you want to know the last spot it touched that image.
+                // For "stops overlapping", it's probably good to keep it for this handler call and then it can be cleared
+                // if the tileState entry itself is removed (if flag becomes 0).
+            }
         }
+
+        // For other events, decide if specificLocation (if any), lastKnownLocation, or fallback is most appropriate
+        // Enters, Exits, EntersArea, ExitsArea are more about the overall relationship with the tile *image*.
+        // Using specificLocation if available (the tile that tipped the state) or fallback seems okay.
+        // If these also need to refer to a "main" instance of the tile image, `lastKnownLocation` might be useful.
+        const locationForAreaEvents = specificLocation || tileState.lastKnownLocation || fallbackLocation;
 
         if (tileState.flag & TileFlag.FullyWithin) {
             if (!(oldFlags & TileFlag.FullyWithin)) {
                 const handler = currentState.getTileHandler(TileEvent.Enters, sprite.kind(), tileImageForHandler);
-                if (handler) handler.handler(sprite, locationForHandler);
+                if (handler) {
+                    // If entering fully, specificLocation is the key. If it also just started overlapping, lastKnownLocation was set.
+                    handler.handler(sprite, specificLocation || tileState.lastKnownLocation || fallbackLocation);
+                }
             }
         } else if (oldFlags & TileFlag.FullyWithin) {
             const handler = currentState.getTileHandler(TileEvent.Exits, sprite.kind(), tileImageForHandler);
-            if (handler) handler.handler(sprite, locationForHandler);
+            if (handler) {
+                // When exiting fully within, the 'lastKnownLocation' of that fully-within state is most relevant.
+                handler.handler(sprite, tileState.lastKnownLocation || fallbackLocation);
+            }
         }
 
         if (tileState.flag & TileFlag.WithinArea) {
             if (!(oldFlags & TileFlag.WithinArea)) {
                 const handler = currentState.getTileHandler(TileEvent.EntersArea, sprite.kind(), tileImageForHandler);
-                if (handler) handler.handler(sprite, locationForHandler);
+                if (handler) handler.handler(sprite, locationForAreaEvents);
             }
         } else if (oldFlags & TileFlag.WithinArea) {
             const handler = currentState.getTileHandler(TileEvent.ExitsArea, sprite.kind(), tileImageForHandler);
-            if (handler) handler.handler(sprite, locationForHandler);
+            if (handler) handler.handler(sprite, locationForAreaEvents);
         }
 
-        if (tileState.flag === 0 && data.tiles.indexOf(tileState) !== -1) {
-            data.tiles.removeElement(tileState);
+        if (tileState.flag === 0) { // If all flags are gone for this tile image
+            if (data.tiles.indexOf(tileState) !== -1) {
+                // Before removing, consider if lastKnownLocation should be used one last time
+                // for any "final stop" event if not handled above.
+                // data.tiles.removeElement(tileState); // Already handled by StopOverlapping if that's the only flag
+            }
+            // If no flags are set, clear lastKnownLocation as it's no longer in any relevant state for this tile image
+            tileState.lastKnownLocation = undefined;
+            if (data.tiles.indexOf(tileState) !== -1 && tileState.flag === 0) { // ensure it's still in the list before removing
+                data.tiles.removeElement(tileState);
+            }
         }
     }
 
